@@ -1,4 +1,4 @@
-d=0.35d=0.7import { task } from '@renderinc/sdk/workflows';
+import { task } from '@renderinc/sdk/workflows';
 import crypto from 'node:crypto';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
@@ -71,7 +71,7 @@ async function render(payload, directory) {
   await run(join);
 
   if (music) {
-    await run(['-y', '-i', silent, '-stream_loop', '-1', '-i', music, '-filter_complex', '[1:a:0]volume=0.12,atrim=duration=14,asetpts=PTS-STARTPTS,afade=t=in:st=0:d=.35,afade=t=out:st=13.3:d=.7[aout]', '-map', '0:v:0', '-map', '[aout]', '-map_metadata', '-1', '-c:v', 'copy', '-c:a', 'aac', '-b:a', '160k', '-shortest', '-movflags', '+faststart', output]);
+    await run(['-y', '-i', silent, '-stream_loop', '-1', '-i', music, '-filter_complex', '[1:a:0]volume=0.12,atrim=duration=14,asetpts=PTS-STARTPTS,afade=t=in:st=0:d=0.35,afade=t=out:st=13.3:d=0.7[aout]', '-map', '0:v:0', '-map', '[aout]', '-map_metadata', '-1', '-c:v', 'copy', '-c:a', 'aac', '-b:a', '160k', '-shortest', '-movflags', '+faststart', output]);
   }
   return output;
 }
@@ -132,4 +132,3 @@ export const montaggioReel = task(
     }
   }
 );
-
