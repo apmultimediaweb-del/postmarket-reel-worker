@@ -76,10 +76,11 @@ async function render(payload, directory) {
   return output;
 }
 
-async function callback(url, reelId, status, body, contentType) {
+async function callback(url, reelId, status, body, contentType, durationMs) {
   const timestamp = String(Math.floor(Date.now() / 1000));
+  const billedDurationMs = String(Math.max(1, Math.round(durationMs)));
   const digest = crypto.createHash('sha256').update(body).digest('hex');
-  const signature = crypto.createHmac('sha256', secret).update(`${timestamp}.${reelId}.${status}.${digest}`).digest('hex');
+  const signature = crypto.createHmac('sha256', secret).update(`${timestamp}.${reelId}.${status}.${billedDurationMs}.${digest}`).digest('hex');
   let lastError = null;
   for (let attempt = 0; attempt < 5; attempt++) {
     try {
@@ -90,6 +91,7 @@ async function callback(url, reelId, status, body, contentType) {
           'X-PM-Timestamp': timestamp,
           'X-PM-Reel-Id': String(reelId),
           'X-PM-Status': status,
+          'X-PM-Duration-Ms': billedDurationMs,
           'X-PM-Signature': signature,
         },
       });
@@ -109,6 +111,7 @@ export const montaggioReel = task(
     retry: { maxRetries: 1, waitDurationMs: 3000, backoffScaling: 2 },
   },
   async function montaggioReel(payload) {
+    const startedAt = Date.now();
     if (secret.length < 32) throw new Error('workflow_not_configured');
     if (!payload || !Number.isInteger(payload.reel_id) || !['images', 'videos'].includes(payload.type) || !Array.isArray(payload.assets) || payload.assets.length !== 3) throw new Error('invalid_payload');
     mediaUrl(payload.callback_url);
@@ -118,12 +121,12 @@ export const montaggioReel = task(
     try {
       const output = await render(payload, directory);
       const video = await fsp.readFile(output);
-      await callback(payload.callback_url, payload.reel_id, 'completed', video, 'video/mp4');
+      await callback(payload.callback_url, payload.reel_id, 'completed', video, 'video/mp4', Date.now() - startedAt);
       return { ok: true, reel_id: payload.reel_id, bytes: video.length };
     } catch (error) {
       const message = String(error?.message || error).slice(-1800);
       const body = Buffer.from(JSON.stringify({ error: message }));
-      try { await callback(payload.callback_url, payload.reel_id, 'failed', body, 'application/json'); } catch (callbackError) {
+      try { await callback(payload.callback_url, payload.reel_id, 'failed', body, 'application/json', Date.now() - startedAt); } catch (callbackError) {
         throw new Error(`${message}\n${String(callbackError?.message || callbackError)}`);
       }
       return { ok: false, reel_id: payload.reel_id, error: message };
