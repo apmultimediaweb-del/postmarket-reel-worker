@@ -23,23 +23,31 @@ function auth(req,res,next){
 }
 function mediaUrl(value){const u=new URL(value);if(u.protocol!=='https:'||!allowedHosts.has(u.hostname))throw new Error('media_url_not_allowed');return u;}
 async function download(url,dest){const response=await fetch(mediaUrl(url),{redirect:'error',signal:AbortSignal.timeout(30000)});if(!response.ok)throw new Error('media_download_failed');const declared=Number(response.headers.get('content-length')||0);if(declared>150*1024*1024)throw new Error('media_too_large');const data=Buffer.from(await response.arrayBuffer());if(data.length>150*1024*1024)throw new Error('media_too_large');await fsp.writeFile(dest,data);}
-function run(args){return new Promise((resolve,reject)=>{const p=spawn('ffmpeg',args,{stdio:['ignore','ignore','pipe']});let err='';p.stderr.on('data',d=>{err=(err+d.toString()).slice(-12000)});p.on('error',reject);p.on('close',code=>code===0?resolve():reject(new Error(err.slice(-3000)||'ffmpeg_failed')));});}
+function run(args){return new Promise((resolve,reject)=>{const p=spawn('ffmpeg',args,{stdio:['ignore','ignore','pipe']});let err='';p.stderr.on('data',d=>{err=(err+d.toString()).slice(-12000)});p.on('error',reject);p.on('close',(code,signal)=>code===0?resolve():reject(new Error(`${signal?`ffmpeg_terminated_${signal}\n`:''}${err.slice(-3000)||'ffmpeg_failed'}`)));});}
 async function render(id,payload){
   const job=jobs.get(id); job.status='processing'; const dir=path.join(root,id); await fsp.mkdir(dir,{recursive:true});
   try{
     const ext=payload.type==='images'?'.jpg':'.mp4'; const inputs=[];
     for(let i=0;i<3;i++){const file=path.join(dir,`scene-${i+1}${ext}`);await download(payload.assets[i],file);inputs.push(file)}
     let music=null;if(payload.music_url){music=path.join(dir,'music.mp3');await download(payload.music_url,music)}
-    const args=['-y'];
-    if(payload.type==='images')for(const file of inputs)args.push('-loop','1','-t','5','-i',file);else for(const file of inputs)args.push('-i',file);
-    const filters=[];
-    // Il piano Free dispone di 512 MB: elaboriamo a 720p e facciamo un solo
-    // upscale finale. Tre catene 1080p simultanee possono causare OOM.
-    for(let i=0;i<3;i++)filters.push(payload.type==='images'?`[${i}:v]scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280,zoompan=z='min(zoom+0.0005,1.07)':d=125:s=720x1280:fps=25,setsar=1,format=yuv420p[v${i}]`:`[${i}:v]trim=0:5,setpts=PTS-STARTPTS,scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280,fps=25,setsar=1,format=yuv420p[v${i}]`);
-    filters.push('[v0][v1]xfade=transition=fade:duration=0.5:offset=4.5[x1]','[x1][v2]xfade=transition=fade:duration=0.5:offset=9.0[x2]','[x2]scale=1080:1920:flags=lanczos[vout]');
-    const silent=path.join(dir,'result-silent.mp4');const out=path.join(dir,'result.mp4');args.push('-filter_complex',filters.join(';'),'-map','[vout]');
-    args.push('-t','14','-r','25','-threads','1','-filter_threads','1','-c:v','libx264','-pix_fmt','yuv420p','-preset','veryfast','-crf','21','-an','-movflags','+faststart',music?silent:out);
-    await run(args);
+    // Le istanze Free hanno solo 512 MB. Prepariamo ogni scena separatamente:
+    // in questo modo FFmpeg non mantiene tre catene di immagini in RAM.
+    const clips=[];
+    for(let i=0;i<3;i++){
+      const clip=path.join(dir,`clip-${i+1}.mp4`); clips.push(clip);
+      const sceneFilter=payload.type==='images'
+        ? `scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280,zoompan=z='min(zoom+0.0005,1.07)':d=125:s=720x1280:fps=25,setsar=1,format=yuv420p`
+        : `trim=0:5,setpts=PTS-STARTPTS,scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280,fps=25,setsar=1,format=yuv420p`;
+      const sceneArgs=['-y'];
+      if(payload.type==='images')sceneArgs.push('-loop','1','-t','5');
+      sceneArgs.push('-i',inputs[i],'-vf',sceneFilter,'-t','5','-r','25','-threads','1','-filter_threads','1','-c:v','libx264','-pix_fmt','yuv420p','-preset','veryfast','-crf','22','-an',clip);
+      await run(sceneArgs);
+    }
+    const silent=path.join(dir,'result-silent.mp4');const out=path.join(dir,'result.mp4');
+    const joinArgs=['-y']; clips.forEach(clip=>joinArgs.push('-i',clip));
+    joinArgs.push('-filter_complex','[0:v][1:v]xfade=transition=fade:duration=0.5:offset=4.5[x1];[x1][2:v]xfade=transition=fade:duration=0.5:offset=9.0[vout]','-map','[vout]','-t','14','-r','25','-threads','1','-filter_threads','1','-c:v','libx264','-pix_fmt','yuv420p','-preset','veryfast','-crf','22','-an','-movflags','+faststart',music?silent:out);
+    await run(joinArgs);
+    await Promise.all(clips.map(clip=>fsp.unlink(clip).catch(()=>{})));
     if(music){
       // Alcuni provider consegnano la musica dentro un MP4 con una traccia video.
       // Selezioniamo esclusivamente il primo flusso audio, senza dipendere
