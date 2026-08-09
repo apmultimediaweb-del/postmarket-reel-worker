@@ -23,7 +23,7 @@ function auth(req,res,next){
 }
 function mediaUrl(value){const u=new URL(value);if(u.protocol!=='https:'||!allowedHosts.has(u.hostname))throw new Error('media_url_not_allowed');return u;}
 async function download(url,dest){const response=await fetch(mediaUrl(url),{redirect:'error',signal:AbortSignal.timeout(30000)});if(!response.ok)throw new Error('media_download_failed');const declared=Number(response.headers.get('content-length')||0);if(declared>150*1024*1024)throw new Error('media_too_large');const data=Buffer.from(await response.arrayBuffer());if(data.length>150*1024*1024)throw new Error('media_too_large');await fsp.writeFile(dest,data);}
-function run(args){return new Promise((resolve,reject)=>{const p=spawn('ffmpeg',args,{stdio:['ignore','ignore','pipe']});let err='';p.stderr.on('data',d=>{if(err.length<8000)err+=d});p.on('error',reject);p.on('close',code=>code===0?resolve():reject(new Error(err.slice(-1000)||'ffmpeg_failed')));});}
+function run(args){return new Promise((resolve,reject)=>{const p=spawn('ffmpeg',args,{stdio:['ignore','ignore','pipe']});let err='';p.stderr.on('data',d=>{err=(err+d.toString()).slice(-12000)});p.on('error',reject);p.on('close',code=>code===0?resolve():reject(new Error(err.slice(-3000)||'ffmpeg_failed')));});}
 async function render(id,payload){
   const job=jobs.get(id); job.status='processing'; const dir=path.join(root,id); await fsp.mkdir(dir,{recursive:true});
   try{
@@ -41,11 +41,14 @@ async function render(id,payload){
     args.push('-t','14','-r','25','-threads','1','-filter_threads','1','-c:v','libx264','-pix_fmt','yuv420p','-preset','veryfast','-crf','21','-an','-movflags','+faststart',music?silent:out);
     await run(args);
     if(music){
-      await run(['-y','-i',silent,'-stream_loop','-1','-i',music,'-filter_complex','[1:a]volume=0.12,atrim=0:14,afade=t=in:st=0:d=.35,afade=t=out:st=13.3:d=.7[aout]','-map','0:v:0','-map','[aout]','-c:v','copy','-c:a','aac','-b:a','160k','-t','14','-movflags','+faststart',out]);
+      // Alcuni provider consegnano la musica dentro un MP4 con una traccia video.
+      // Selezioniamo esclusivamente il primo flusso audio, senza dipendere
+      // dall'estensione del file scaricato.
+      await run(['-y','-i',silent,'-stream_loop','-1','-i',music,'-filter_complex','[1:a:0]volume=0.12,atrim=duration=14,asetpts=PTS-STARTPTS,afade=t=in:st=0:d=.35,afade=t=out:st=13.3:d=.7[aout]','-map','0:v:0','-map','[aout]','-map_metadata','-1','-c:v','copy','-c:a','aac','-b:a','160k','-shortest','-movflags','+faststart',out]);
       await fsp.unlink(silent).catch(()=>{});
     }
     job.status='completed';job.token=crypto.randomBytes(24).toString('hex');job.result_url=`${process.env.PUBLIC_URL}/v1/results/${id}?token=${job.token}`;
-  }catch(e){job.status='failed';job.error=String(e.message||e).slice(0,500);console.error(`[job ${id}]`,job.error)}
+  }catch(e){job.status='failed';job.error=String(e.message||e).slice(-2000);console.error(`[job ${id}]`,job.error)}
 }
 
 app.get('/health',(req,res)=>res.json({ok:true}));
