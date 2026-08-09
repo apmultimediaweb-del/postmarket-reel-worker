@@ -3,7 +3,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg ca-certi
 WORKDIR /app
 COPY package*.json ./
 RUN npm install --omit=dev
-COPY server.js ./
+COPY *.js ./
 RUN mkdir -p /app/jobs
 ENV PORT=8080
 EXPOSE 8080
