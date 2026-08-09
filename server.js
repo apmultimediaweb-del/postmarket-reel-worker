@@ -29,20 +29,23 @@ async function render(id,payload){
   try{
     const ext=payload.type==='images'?'.jpg':'.mp4'; const inputs=[];
     for(let i=0;i<3;i++){const file=path.join(dir,`scene-${i+1}${ext}`);await download(payload.assets[i],file);inputs.push(file)}
-    let music=null;if(payload.music_url){music=path.join(dir,'music');await download(payload.music_url,music)}
+    let music=null;if(payload.music_url){music=path.join(dir,'music.mp3');await download(payload.music_url,music)}
     const args=['-y'];
     if(payload.type==='images')for(const file of inputs)args.push('-loop','1','-t','5','-i',file);else for(const file of inputs)args.push('-i',file);
-    if(music)args.push('-stream_loop','-1','-i',music);
     const filters=[];
     // Il piano Free dispone di 512 MB: elaboriamo a 720p e facciamo un solo
     // upscale finale. Tre catene 1080p simultanee possono causare OOM.
     for(let i=0;i<3;i++)filters.push(payload.type==='images'?`[${i}:v]scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280,zoompan=z='min(zoom+0.0005,1.07)':d=125:s=720x1280:fps=25,setsar=1,format=yuv420p[v${i}]`:`[${i}:v]trim=0:5,setpts=PTS-STARTPTS,scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280,fps=25,setsar=1,format=yuv420p[v${i}]`);
     filters.push('[v0][v1]xfade=transition=fade:duration=0.5:offset=4.5[x1]','[x1][v2]xfade=transition=fade:duration=0.5:offset=9.0[x2]','[x2]scale=1080:1920:flags=lanczos[vout]');
-    if(music)filters.push('[3:a]volume=0.12,atrim=0:14,afade=t=in:st=0:d=.35,afade=t=out:st=13.3:d=.7[aout]');
-    const out=path.join(dir,'result.mp4');args.push('-filter_complex',filters.join(';'),'-map','[vout]');if(music)args.push('-map','[aout]');
-    args.push('-t','14','-r','25','-threads','1','-filter_threads','1','-c:v','libx264','-pix_fmt','yuv420p','-preset','veryfast','-crf','21');if(music)args.push('-c:a','aac','-b:a','160k');else args.push('-an');args.push('-movflags','+faststart',out);
-    await run(args);job.status='completed';job.token=crypto.randomBytes(24).toString('hex');job.result_url=`${process.env.PUBLIC_URL}/v1/results/${id}?token=${job.token}`;
-  }catch(e){job.status='failed';job.error=String(e.message||e).slice(0,500)}
+    const silent=path.join(dir,'result-silent.mp4');const out=path.join(dir,'result.mp4');args.push('-filter_complex',filters.join(';'),'-map','[vout]');
+    args.push('-t','14','-r','25','-threads','1','-filter_threads','1','-c:v','libx264','-pix_fmt','yuv420p','-preset','veryfast','-crf','21','-an','-movflags','+faststart',music?silent:out);
+    await run(args);
+    if(music){
+      await run(['-y','-i',silent,'-stream_loop','-1','-i',music,'-filter_complex','[1:a]volume=0.12,atrim=0:14,afade=t=in:st=0:d=.35,afade=t=out:st=13.3:d=.7[aout]','-map','0:v:0','-map','[aout]','-c:v','copy','-c:a','aac','-b:a','160k','-t','14','-movflags','+faststart',out]);
+      await fsp.unlink(silent).catch(()=>{});
+    }
+    job.status='completed';job.token=crypto.randomBytes(24).toString('hex');job.result_url=`${process.env.PUBLIC_URL}/v1/results/${id}?token=${job.token}`;
+  }catch(e){job.status='failed';job.error=String(e.message||e).slice(0,500);console.error(`[job ${id}]`,job.error)}
 }
 
 app.get('/health',(req,res)=>res.json({ok:true}));
