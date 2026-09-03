@@ -36,6 +36,45 @@ function run(args) {
   });
 }
 
+function directionPlan(style = 'automatico') {
+  const groups = {
+    elegante: [
+      "zoompan=z='min(zoom+0.00055,1.065)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'",
+      "zoompan=z='if(eq(on,1),1.065,max(1.0,zoom-0.00052))':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'",
+      "zoompan=z='1.045':x='iw/2-(iw/zoom/2)':y='(ih-ih/zoom)*on/124'",
+      "zoompan=z='1.045':x='iw/2-(iw/zoom/2)':y='(ih-ih/zoom)*(1-on/124)'",
+    ],
+    dinamico: [
+      "zoompan=z='min(zoom+0.0008,1.09)':x='(iw-iw/zoom)*on/124':y='(ih-ih/zoom)*(1-on/124)'",
+      "zoompan=z='min(zoom+0.0008,1.09)':x='(iw-iw/zoom)*(1-on/124)':y='(ih-ih/zoom)*on/124'",
+      "zoompan=z='1.075':x='(iw-iw/zoom)*on/124':y='ih/2-(ih/zoom/2)'",
+      "zoompan=z='1.075':x='(iw-iw/zoom)*(1-on/124)':y='ih/2-(ih/zoom/2)'",
+    ],
+    cinematografico: [
+      "zoompan=z='min(zoom+0.00065,1.075)':x='iw/2-(iw/zoom/2)':y='(ih-ih/zoom)*on/124'",
+      "zoompan=z='if(eq(on,1),1.075,max(1.0,zoom-0.0006))':x='(iw-iw/zoom)*on/124':y='ih/2-(ih/zoom/2)'",
+      "zoompan=z='1.065':x='(iw-iw/zoom)*on/124':y='(ih-ih/zoom)*on/124'",
+      "zoompan=z='1.065':x='(iw-iw/zoom)*(1-on/124)':y='(ih-ih/zoom)*(1-on/124)'",
+    ],
+    base: [
+      "zoompan=z='1.055':x='(iw-iw/zoom)*on/124':y='ih/2-(ih/zoom/2)'",
+      "zoompan=z='1.055':x='(iw-iw/zoom)*(1-on/124)':y='ih/2-(ih/zoom/2)'",
+      "zoompan=z='1.05':x='iw/2-(iw/zoom/2)':y='(ih-ih/zoom)*on/124'",
+      "zoompan=z='1.05':x='iw/2-(iw/zoom/2)':y='(ih-ih/zoom)*(1-on/124)'",
+    ],
+  };
+  const transitionGroups = {
+    elegante: ['fade', 'dissolve', 'smoothleft', 'smoothright'],
+    dinamico: ['slideleft', 'slideright', 'slideup', 'slidedown', 'wipeleft', 'wiperight'],
+    cinematografico: ['fadeblack', 'fadewhite', 'dissolve', 'smoothup', 'smoothdown'],
+    base: ['fade', 'slideleft', 'slideright', 'smoothleft', 'smoothright'],
+  };
+  const selected = Object.hasOwn(groups, style) && style !== 'base' ? style : 'automatico';
+  const movements = (selected === 'automatico' ? Object.values(groups).flat() : [...groups[selected], ...groups.base]).sort(() => Math.random() - 0.5);
+  const transitions = [...new Set(selected === 'automatico' ? Object.values(transitionGroups).flat() : transitionGroups[selected])].sort(() => Math.random() - 0.5);
+  return { movements: movements.slice(0, 3), transitions: transitions.slice(0, 2) };
+}
+
 async function render(payload, directory) {
   const extension = payload.type === 'images' ? '.jpg' : '.mp4';
   const inputs = [];
@@ -51,11 +90,12 @@ async function render(payload, directory) {
   }
 
   const clips = [];
+  const direction = directionPlan(payload.style);
   for (let index = 0; index < 3; index++) {
     const clip = path.join(directory, `clip-${index + 1}.mp4`);
     clips.push(clip);
     const filter = payload.type === 'images'
-      ? "scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280,zoompan=z='min(zoom+0.0005,1.07)':d=125:s=720x1280:fps=25,setsar=1,format=yuv420p"
+      ? `scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280,${direction.movements[index]}:d=125:s=720x1280:fps=25,setsar=1,format=yuv420p`
       : 'trim=0:5,setpts=PTS-STARTPTS,scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280,fps=25,setsar=1,format=yuv420p';
     const args = ['-y'];
     if (payload.type === 'images') args.push('-loop', '1', '-t', '5');
@@ -67,7 +107,7 @@ async function render(payload, directory) {
   const output = path.join(directory, 'result.mp4');
   const join = ['-y'];
   clips.forEach(clip => join.push('-i', clip));
-  join.push('-filter_complex', '[0:v][1:v]xfade=transition=fade:duration=0.5:offset=4.5[x1];[x1][2:v]xfade=transition=fade:duration=0.5:offset=9.0[vout]', '-map', '[vout]', '-t', '14', '-r', '25', '-threads', '1', '-filter_threads', '1', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-preset', 'veryfast', '-crf', '22', '-an', '-movflags', '+faststart', music ? silent : output);
+  join.push('-filter_complex', `[0:v][1:v]xfade=transition=${direction.transitions[0]}:duration=0.5:offset=4.5[x1];[x1][2:v]xfade=transition=${direction.transitions[1]}:duration=0.5:offset=9.0[vout]`, '-map', '[vout]', '-t', '14', '-r', '25', '-threads', '1', '-filter_threads', '1', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-preset', 'veryfast', '-crf', '22', '-an', '-movflags', '+faststart', music ? silent : output);
   await run(join);
 
   if (music) {
