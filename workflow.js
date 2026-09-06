@@ -36,7 +36,7 @@ function run(args) {
   });
 }
 
-function directionPlan(style = 'automatico') {
+function directionPlan(style = 'automatico', count = 3) {
   const groups = {
     elegante: [
       "zoompan=z='min(zoom+0.00055,1.065)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'",
@@ -72,13 +72,28 @@ function directionPlan(style = 'automatico') {
   const selected = Object.hasOwn(groups, style) && style !== 'base' ? style : 'automatico';
   const movements = (selected === 'automatico' ? Object.values(groups).flat() : [...groups[selected], ...groups.base]).sort(() => Math.random() - 0.5);
   const transitions = [...new Set(selected === 'automatico' ? Object.values(transitionGroups).flat() : transitionGroups[selected])].sort(() => Math.random() - 0.5);
-  return { movements: movements.slice(0, 3), transitions: transitions.slice(0, 2) };
+  const movementPlan = Array.from({ length: count }, (_, index) => movements[index % movements.length]);
+  const transitionPlan = Array.from({ length: Math.max(0, count - 1) }, (_, index) => transitions[index % transitions.length]);
+  return { movements: movementPlan, transitions: transitionPlan };
 }
 
 async function render(payload, directory) {
   const extension = payload.type === 'images' ? '.jpg' : '.mp4';
   const inputs = [];
-  for (let index = 0; index < 3; index++) {
+  const count = payload.assets.length;
+  const targetDuration = Math.max(5, Math.min(15, Number(payload.target_duration || 14)));
+  const transitionDuration = count > 6 ? 0.28 : count > 3 ? 0.35 : 0.5;
+  const clipDuration = (targetDuration + transitionDuration * (count - 1)) / count;
+  const frames = Math.max(25, Math.round(clipDuration * 25));
+  const lastFrame = Math.max(1, frames - 1);
+  const formats = {
+    '9:16': [720, 1280],
+    '4:5': [864, 1080],
+    '1:1': [1080, 1080],
+    '16:9': [1280, 720],
+  };
+  const [width, height] = formats[payload.output_format] || formats['9:16'];
+  for (let index = 0; index < count; index++) {
     const file = path.join(directory, `scene-${index + 1}${extension}`);
     await download(payload.assets[index], file);
     inputs.push(file);
@@ -90,16 +105,16 @@ async function render(payload, directory) {
   }
 
   const clips = [];
-  const direction = directionPlan(payload.style);
-  for (let index = 0; index < 3; index++) {
+  const direction = directionPlan(payload.style, count);
+  for (let index = 0; index < count; index++) {
     const clip = path.join(directory, `clip-${index + 1}.mp4`);
     clips.push(clip);
     const filter = payload.type === 'images'
-      ? `scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280,${direction.movements[index]}:d=125:s=720x1280:fps=25,setsar=1,format=yuv420p`
-      : 'trim=0:5,setpts=PTS-STARTPTS,scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280,fps=25,setsar=1,format=yuv420p';
+      ? `scale=${width}:${height}:force_original_aspect_ratio=increase,crop=${width}:${height},${direction.movements[index].replaceAll('124', String(lastFrame))}:d=${frames}:s=${width}x${height}:fps=25,setsar=1,format=yuv420p`
+      : `trim=0:${clipDuration.toFixed(3)},setpts=PTS-STARTPTS,scale=${width}:${height}:force_original_aspect_ratio=increase,crop=${width}:${height},fps=25,setsar=1,format=yuv420p`;
     const args = ['-y'];
-    if (payload.type === 'images') args.push('-loop', '1', '-t', '5');
-    args.push('-i', inputs[index], '-vf', filter, '-t', '5', '-r', '25', '-threads', '1', '-filter_threads', '1', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-preset', 'veryfast', '-crf', '22', '-an', clip);
+    if (payload.type === 'images') args.push('-loop', '1', '-t', clipDuration.toFixed(3));
+    args.push('-i', inputs[index], '-vf', filter, '-t', clipDuration.toFixed(3), '-r', '25', '-threads', '1', '-filter_threads', '1', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-preset', 'veryfast', '-crf', '22', '-an', clip);
     await run(args);
   }
 
@@ -107,11 +122,20 @@ async function render(payload, directory) {
   const output = path.join(directory, 'result.mp4');
   const join = ['-y'];
   clips.forEach(clip => join.push('-i', clip));
-  join.push('-filter_complex', `[0:v][1:v]xfade=transition=${direction.transitions[0]}:duration=0.5:offset=4.5[x1];[x1][2:v]xfade=transition=${direction.transitions[1]}:duration=0.5:offset=9.0[vout]`, '-map', '[vout]', '-t', '14', '-r', '25', '-threads', '1', '-filter_threads', '1', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-preset', 'veryfast', '-crf', '22', '-an', '-movflags', '+faststart', music ? silent : output);
+  const joins = [];
+  let previous = '0:v';
+  for (let index = 1; index < count; index++) {
+    const outputLabel = index === count - 1 ? 'vout' : `x${index}`;
+    const offset = index * (clipDuration - transitionDuration);
+    joins.push(`[${previous}][${index}:v]xfade=transition=${direction.transitions[index - 1]}:duration=${transitionDuration.toFixed(3)}:offset=${offset.toFixed(3)}[${outputLabel}]`);
+    previous = outputLabel;
+  }
+  join.push('-filter_complex', joins.join(';'), '-map', '[vout]', '-t', String(targetDuration), '-r', '25', '-threads', '1', '-filter_threads', '1', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-preset', 'veryfast', '-crf', '22', '-an', '-movflags', '+faststart', music ? silent : output);
   await run(join);
 
   if (music) {
-    await run(['-y', '-i', silent, '-stream_loop', '-1', '-i', music, '-filter_complex', '[1:a:0]volume=0.12,atrim=duration=14,asetpts=PTS-STARTPTS,afade=t=in:st=0:d=0.35,afade=t=out:st=13.3:d=0.7[aout]', '-map', '0:v:0', '-map', '[aout]', '-map_metadata', '-1', '-c:v', 'copy', '-c:a', 'aac', '-b:a', '160k', '-shortest', '-movflags', '+faststart', output]);
+    const fadeOutStart = Math.max(0, targetDuration - 0.7);
+    await run(['-y', '-i', silent, '-stream_loop', '-1', '-i', music, '-filter_complex', `[1:a:0]volume=0.12,atrim=duration=${targetDuration},asetpts=PTS-STARTPTS,afade=t=in:st=0:d=0.35,afade=t=out:st=${fadeOutStart}:d=0.7[aout]`, '-map', '0:v:0', '-map', '[aout]', '-map_metadata', '-1', '-c:v', 'copy', '-c:a', 'aac', '-b:a', '160k', '-shortest', '-movflags', '+faststart', output]);
   }
   return output;
 }
@@ -153,7 +177,11 @@ export const montaggioReel = task(
   async function montaggioReel(payload) {
     const startedAt = Date.now();
     if (secret.length < 32) throw new Error('workflow_not_configured');
-    if (!payload || !Number.isInteger(payload.reel_id) || !['images', 'videos'].includes(payload.type) || !Array.isArray(payload.assets) || payload.assets.length !== 3) throw new Error('invalid_payload');
+    const assetCountValid = Array.isArray(payload?.assets) && (payload.type === 'images'
+      ? payload.assets.length >= 3 && payload.assets.length <= 10
+      : payload.assets.length === 3);
+    if (!payload || !Number.isInteger(payload.reel_id) || !['images', 'videos'].includes(payload.type) || !assetCountValid) throw new Error('invalid_payload');
+    if (payload.output_format && !['9:16', '4:5', '1:1', '16:9'].includes(payload.output_format)) throw new Error('invalid_output_format');
     mediaUrl(payload.callback_url);
     payload.assets.forEach(mediaUrl);
     if (payload.music_url) mediaUrl(payload.music_url);
