@@ -84,7 +84,8 @@ async function render(payload, directory) {
   const targetDuration = Math.max(5, Math.min(15, Number(payload.target_duration || 14)));
   const transitionDuration = count > 6 ? 0.28 : count > 3 ? 0.35 : 0.5;
   const clipDuration = (targetDuration + transitionDuration * (count - 1)) / count;
-  const frames = Math.max(25, Math.round(clipDuration * 25));
+  const fps = 30;
+  const frames = Math.max(fps, Math.round(clipDuration * fps));
   const lastFrame = Math.max(1, frames - 1);
   const formats = {
     '9:16': [720, 1280],
@@ -93,6 +94,10 @@ async function render(payload, directory) {
     '16:9': [1280, 720],
   };
   const [width, height] = formats[payload.output_format] || formats['9:16'];
+  // Zoompan arrotonda le coordinate ai pixel interi: lavorare a risoluzione
+  // doppia riduce sensibilmente il micro-jitter delle panoramiche su foto statiche.
+  const motionWidth = width * 2;
+  const motionHeight = height * 2;
   for (let index = 0; index < count; index++) {
     const file = path.join(directory, `scene-${index + 1}${extension}`);
     await download(payload.assets[index], file);
@@ -110,11 +115,11 @@ async function render(payload, directory) {
     const clip = path.join(directory, `clip-${index + 1}.mp4`);
     clips.push(clip);
     const filter = payload.type === 'images'
-      ? `scale=${width}:${height}:force_original_aspect_ratio=increase,crop=${width}:${height},${direction.movements[index].replaceAll('124', String(lastFrame))}:d=${frames}:s=${width}x${height}:fps=25,setsar=1,format=yuv420p`
-      : `trim=0:${clipDuration.toFixed(3)},setpts=PTS-STARTPTS,scale=${width}:${height}:force_original_aspect_ratio=increase,crop=${width}:${height},fps=25,setsar=1,format=yuv420p`;
+      ? `scale=${motionWidth}:${motionHeight}:force_original_aspect_ratio=increase:flags=lanczos,crop=${motionWidth}:${motionHeight},${direction.movements[index].replaceAll('124', String(lastFrame))}:d=${frames}:s=${width}x${height}:fps=${fps},setsar=1,settb=AVTB,format=yuv420p`
+      : `trim=0:${clipDuration.toFixed(3)},setpts=PTS-STARTPTS,scale=${width}:${height}:force_original_aspect_ratio=increase:flags=lanczos,crop=${width}:${height},fps=${fps},setsar=1,settb=AVTB,format=yuv420p`;
     const args = ['-y'];
     if (payload.type === 'images') args.push('-loop', '1', '-t', clipDuration.toFixed(3));
-    args.push('-i', inputs[index], '-vf', filter, '-t', clipDuration.toFixed(3), '-r', '25', '-threads', '1', '-filter_threads', '1', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-preset', 'veryfast', '-crf', '22', '-an', clip);
+    args.push('-i', inputs[index], '-vf', filter, '-t', clipDuration.toFixed(3), '-r', String(fps), '-threads', '1', '-filter_threads', '1', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-preset', 'veryfast', '-crf', '21', '-an', clip);
     await run(args);
   }
 
@@ -130,7 +135,7 @@ async function render(payload, directory) {
     joins.push(`[${previous}][${index}:v]xfade=transition=${direction.transitions[index - 1]}:duration=${transitionDuration.toFixed(3)}:offset=${offset.toFixed(3)}[${outputLabel}]`);
     previous = outputLabel;
   }
-  join.push('-filter_complex', joins.join(';'), '-map', '[vout]', '-t', String(targetDuration), '-r', '25', '-threads', '1', '-filter_threads', '1', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-preset', 'veryfast', '-crf', '22', '-an', '-movflags', '+faststart', music ? silent : output);
+  join.push('-filter_complex', joins.join(';'), '-map', '[vout]', '-t', String(targetDuration), '-r', String(fps), '-threads', '1', '-filter_threads', '1', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-preset', 'veryfast', '-crf', '21', '-an', '-movflags', '+faststart', music ? silent : output);
   await run(join);
 
   if (music) {
