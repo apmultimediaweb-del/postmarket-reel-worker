@@ -36,6 +36,36 @@ function run(args) {
   });
 }
 
+function runOutput(command, args) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    let output = '';
+    let error = '';
+    child.stdout.on('data', chunk => { output += chunk.toString(); });
+    child.stderr.on('data', chunk => { error = (error + chunk.toString()).slice(-4000); });
+    child.on('error', reject);
+    child.on('close', code => code === 0 ? resolve(output) : reject(new Error(error || `${command}_failed`)));
+  });
+}
+
+async function renderAvatar(payload, directory) {
+  const source = path.join(directory, 'avatar-source.mp4');
+  const output = path.join(directory, 'result.mp4');
+  await download(payload.assets[0], source);
+  const raw = await runOutput('python3', [path.join(process.cwd(), 'detect_avatar_frame.py'), source]);
+  const frame = JSON.parse(raw);
+  const sourceWidth = Math.max(2, Number(frame.width));
+  const contentHeight = Math.max(2, Number(frame.content_height));
+  const top = Math.max(0, Number(frame.top));
+  const faceX = Math.min(0.92, Math.max(0.08, Number(frame.face_x) || 0.5));
+  const scaledWidth = sourceWidth * (1280 / contentHeight);
+  const focalScaledX = faceX * scaledWidth;
+  const cropX = Math.max(0, Math.min(Math.max(0, scaledWidth - 720), focalScaledX - 360));
+  const filter = `crop=${sourceWidth}:${contentHeight}:0:${top},scale=-2:1280:flags=lanczos,crop=720:1280:${Math.round(cropX)}:0,setsar=1,format=yuv420p`;
+  await run(['-y', '-i', source, '-vf', filter, '-map', '0:v:0', '-map', '0:a?', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-c:a', 'aac', '-b:a', '160k', '-movflags', '+faststart', output]);
+  return output;
+}
+
 function directionPlan(style = 'automatico', count = 3) {
   const groups = {
     elegante: [
@@ -184,15 +214,15 @@ export const montaggioReel = task(
     if (secret.length < 32) throw new Error('workflow_not_configured');
     const assetCountValid = Array.isArray(payload?.assets) && (payload.type === 'images'
       ? payload.assets.length >= 3 && payload.assets.length <= 10
-      : payload.assets.length === 3);
-    if (!payload || !Number.isInteger(payload.reel_id) || !['images', 'videos'].includes(payload.type) || !assetCountValid) throw new Error('invalid_payload');
+      : payload.type === 'avatar' ? payload.assets.length === 1 : payload.assets.length === 3);
+    if (!payload || !Number.isInteger(payload.reel_id) || !['images', 'videos', 'avatar'].includes(payload.type) || !assetCountValid) throw new Error('invalid_payload');
     if (payload.output_format && !['9:16', '4:5', '1:1', '16:9'].includes(payload.output_format)) throw new Error('invalid_output_format');
     mediaUrl(payload.callback_url);
     payload.assets.forEach(mediaUrl);
     if (payload.music_url) mediaUrl(payload.music_url);
     const directory = await fsp.mkdtemp(path.join(os.tmpdir(), `reel-${payload.reel_id}-`));
     try {
-      const output = await render(payload, directory);
+      const output = payload.type === 'avatar' ? await renderAvatar(payload, directory) : await render(payload, directory);
       const video = await fsp.readFile(output);
       await callback(payload.callback_url, payload.reel_id, 'completed', video, 'video/mp4', Date.now() - startedAt);
       return { ok: true, reel_id: payload.reel_id, bytes: video.length };
