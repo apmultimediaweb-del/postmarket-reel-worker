@@ -61,7 +61,7 @@ async function renderAvatar(payload, directory) {
   const formats = { '4:5': [864, 1080], '9:16': [720, 1280] }; const [targetWidth, targetHeight] = formats[payload.output_format] || formats['4:5']; const scaledWidth = sourceWidth * (targetHeight / contentHeight);
   const focalScaledX = faceX * scaledWidth;
   const cropX = Math.max(0, Math.min(Math.max(0, scaledWidth - targetWidth), focalScaledX - targetWidth / 2));
-  const filter = `crop=${sourceWidth}:${contentHeight}:0:${top},scale=-2:${targetHeight}:flags=lanczos,crop=${targetWidth}:${targetHeight}:${Math.round(cropX)}:0,setsar=1,format=yuv420p`;
+  const renderHeight = Math.ceil((targetHeight * 1.02) / 2) * 2; const cropY = Math.round((renderHeight - targetHeight) / 2); const filter = `crop=${sourceWidth}:${contentHeight}:0:${top},scale=-2:${renderHeight}:flags=lanczos,crop=${targetWidth}:${targetHeight}:${Math.round(cropX)}:${cropY},setsar=1,format=yuv420p`;
   await run(['-y', '-i', source, '-vf', filter, '-map', '0:v:0', '-map', '0:a?', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-c:a', 'aac', '-b:a', '160k', '-movflags', '+faststart', output]);
   return output;
 }
