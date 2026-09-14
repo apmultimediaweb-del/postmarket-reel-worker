@@ -48,6 +48,16 @@ function runOutput(command, args) {
   });
 }
 
+function aiLabelFilter(labelChoice, width, height) {
+  if (!['creato', 'modificato'].includes(labelChoice)) return '';
+  const label = labelChoice === 'modificato' ? 'Modificato con AI' : 'Creato con AI';
+  const fontSize = Math.max(18, Math.round(width * 0.022));
+  const boxHeight = Math.max(42, Math.round(fontSize * 2.1));
+  const boxWidth = Math.max(190, Math.round(fontSize * (label.length * 0.62 + 3.8)));
+  const margin = Math.max(18, Math.round(Math.min(width, height) * 0.025));
+  return `,drawbox=x=${margin}:y=h-${margin}-${boxHeight}:w=${boxWidth}:h=${boxHeight}:color=white@0.60:t=fill,drawtext=font='DejaVu Sans':text='AI  ${label}':fontcolor=#262a32:fontsize=${fontSize}:x=${margin}+${Math.round(fontSize * 0.8)}:y=h-${margin}-${boxHeight}+(${boxHeight}-text_h)/2`;
+}
+
 async function renderAvatar(payload, directory) {
   const source = path.join(directory, 'avatar-source.mp4');
   const output = path.join(directory, 'result.mp4');
@@ -61,7 +71,7 @@ async function renderAvatar(payload, directory) {
   const formats = { '4:5': [864, 1080], '9:16': [720, 1280] }; const [targetWidth, targetHeight] = formats[payload.output_format] || formats['4:5']; const renderHeight = Math.ceil((targetHeight * 1.08) / 2) * 2; const scaledWidth = sourceWidth * (renderHeight / contentHeight);
   const focalScaledX = faceX * scaledWidth;
   const cropX = Math.max(0, Math.min(Math.max(0, scaledWidth - targetWidth), focalScaledX - targetWidth / 2));
-  const cropY = Math.round((renderHeight - targetHeight) / 2); const filter = `crop=${sourceWidth}:${contentHeight}:0:${top},scale=-2:${renderHeight}:flags=lanczos,crop=${targetWidth}:${targetHeight}:${Math.round(cropX)}:${cropY},setsar=1,format=yuv420p`;
+  const cropY = Math.round((renderHeight - targetHeight) / 2); const filter = `crop=${sourceWidth}:${contentHeight}:0:${top},scale=-2:${renderHeight}:flags=lanczos,crop=${targetWidth}:${targetHeight}:${Math.round(cropX)}:${cropY},setsar=1${aiLabelFilter(payload.ai_label, targetWidth, targetHeight)},format=yuv420p`;
   await run(['-y', '-i', source, '-vf', filter, '-map', '0:v:0', '-map', '0:a?', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-c:a', 'aac', '-b:a', '160k', '-movflags', '+faststart', output]);
   return output;
 }
@@ -165,7 +175,12 @@ async function render(payload, directory) {
     joins.push(`[${previous}][${index}:v]xfade=transition=${direction.transitions[index - 1]}:duration=${transitionDuration.toFixed(3)}:offset=${offset.toFixed(3)}[${outputLabel}]`);
     previous = outputLabel;
   }
-  join.push('-filter_complex', joins.join(';'), '-map', '[vout]', '-t', String(targetDuration), '-r', String(fps), '-threads', '1', '-filter_threads', '1', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-preset', 'veryfast', '-crf', '21', '-an', '-movflags', '+faststart', music ? silent : output);
+  let finalMap = '[vout]';
+  if (['creato', 'modificato'].includes(payload.ai_label)) {
+    joins.push(`[vout]${aiLabelFilter(payload.ai_label, width, height).slice(1)}[vlabel]`);
+    finalMap = '[vlabel]';
+  }
+  join.push('-filter_complex', joins.join(';'), '-map', finalMap, '-t', String(targetDuration), '-r', String(fps), '-threads', '1', '-filter_threads', '1', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-preset', 'veryfast', '-crf', '21', '-an', '-movflags', '+faststart', music ? silent : output);
   await run(join);
 
   if (music) {
@@ -217,6 +232,7 @@ export const montaggioReel = task(
       : payload.type === 'avatar' ? payload.assets.length === 1 : payload.assets.length === 3);
     if (!payload || !Number.isInteger(payload.reel_id) || !['images', 'videos', 'avatar'].includes(payload.type) || !assetCountValid) throw new Error('invalid_payload');
     if (payload.output_format && !['9:16', '4:5', '1:1', '16:9'].includes(payload.output_format)) throw new Error('invalid_output_format');
+    if (payload.ai_label && !['creato', 'modificato'].includes(payload.ai_label)) throw new Error('invalid_ai_label');
     mediaUrl(payload.callback_url);
     payload.assets.forEach(mediaUrl);
     if (payload.music_url) mediaUrl(payload.music_url);
