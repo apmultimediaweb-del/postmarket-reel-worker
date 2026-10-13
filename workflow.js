@@ -258,3 +258,7 @@ export const montaggioReel = task(
 // Internal preview task; existing montaggioReel implementation stays unchanged.
 import {processTypographyPreview} from "./typography-preview.js";
 export const tipografiaVideoAnteprima = task({name:"tipografiaVideoAnteprima",plan:"standard",timeoutSeconds:1800,retry:{maxRetries:0}},processTypographyPreview);
+
+// Clip preview is isolated from montaggioReel and the public video path.
+import {processClipPreview} from './clip-preview.js';
+export const clipTipografiaAnteprima = task({name:'clipTipografiaAnteprima',plan:'standard',timeoutSeconds:900,retry:{maxRetries:0}},processClipPreview);
