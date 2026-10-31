@@ -262,3 +262,5 @@ export const tipografiaVideoAnteprima = task({name:"tipografiaVideoAnteprima",pl
 // Clip preview is isolated from montaggioReel and the public video path.
 import {processClipPreview} from './clip-preview.js';
 export const clipTipografiaAnteprima = task({name:'clipTipografiaAnteprima',plan:'standard',timeoutSeconds:900,retry:{maxRetries:0}},processClipPreview);
+
+export { videoRapido } from "./quick-reel.js";
