@@ -50,6 +50,16 @@ export function captionEvents(alignment, factor) {
   }
   return lines.join('\n');
 }
+export function captionColors(color) {
+  if (!/^#[0-9a-f]{6}$/i.test(color ?? '')) return {box:'&H00201912',text:'&H00FFFFFF'};
+  const [r,g,b] = color.slice(1).match(/../g);
+  const linear = hex => {
+    const value = parseInt(hex,16)/255;
+    return value <= 0.04045 ? value/12.92 : ((value+0.055)/1.055)**2.4;
+  };
+  const luminance = 0.2126*linear(r)+0.7152*linear(g)+0.0722*linear(b);
+  return {box:`&H00${b}${g}${r}`,text:luminance > 0.179 ? '&H00000000' : '&H00FFFFFF'};
+}
 export async function renderQuickReel(payload, directory, download, localFiles=null) {
   const clip=path.join(directory,'clip.mp4');
   const voice=path.join(directory,'voice.mp3');
@@ -62,7 +72,8 @@ export async function renderQuickReel(payload, directory, download, localFiles=n
   const voiceDuration=Number(await command('ffprobe',['-v','error','-show_entries','format=duration','-of','default=nw=1:nk=1',voice]));
   const factor=Math.max(1,voiceDuration/11.7);
   if(!Number.isFinite(factor)||factor>1.45)throw new Error('voice_too_long');
-  const subtitles = `[Script Info]\nScriptType: v4.00+\nPlayResX: 1080\nPlayResY: 1920\nWrapStyle: 0\n\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\nStyle: Caption,DejaVu Sans,58,&H00FFFFFF,&H000000FF,&H00201912,&H90000000,-1,0,0,0,100,100,0,0,3,14,0,2,90,90,330,1\nStyle: CTA,DejaVu Sans,70,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,0,0,5,100,100,0,1\nStyle: Brand,DejaVu Sans,42,&H005CB1FF,&H000000FF,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,0,0,5,100,100,0,1\n\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n${captionEvents(payload.alignment,factor)}\nDialogue: 1,0:00:12.00,0:00:15.00,CTA,,0,0,0,,{\\pos(540,920)}${assText(payload.cta,45)}\nDialogue: 1,0:00:12.00,0:00:15.00,Brand,,0,0,0,,{\\pos(540,1110)}${assText(payload.brand,60)}\n`;
+  const colors = captionColors(payload.caption_color);
+  const subtitles = `[Script Info]\nScriptType: v4.00+\nPlayResX: 1080\nPlayResY: 1920\nWrapStyle: 0\n\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\nStyle: Caption,DejaVu Sans,58,${colors.text},&H000000FF,${colors.box},${colors.box},-1,0,0,0,100,100,0,0,3,14,0,2,90,90,330,1\nStyle: CTA,DejaVu Sans,70,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,0,0,5,100,100,0,1\nStyle: Brand,DejaVu Sans,42,&H005CB1FF,&H000000FF,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,0,0,5,100,100,0,1\n\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n${captionEvents(payload.alignment,factor)}\nDialogue: 1,0:00:12.00,0:00:15.00,CTA,,0,0,0,,{\\pos(540,920)}${assText(payload.cta,45)}\nDialogue: 1,0:00:12.00,0:00:15.00,Brand,,0,0,0,,{\\pos(540,1110)}${assText(payload.brand,60)}\n`;
   const ass=path.join(directory,'captions.ass');
   await fs.writeFile(ass,subtitles);
   const output=path.join(directory,'result.mp4');
